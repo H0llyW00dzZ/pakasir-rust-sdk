@@ -51,18 +51,26 @@ async fn main() -> Result<(), pakasir_sdk::Error> {
 
 ```text
 pakasir-rust-sdk/
+├── .github/
+│   ├── dependabot.yml
+│   └── workflows/
+│       └── test.yml
 ├── Cargo.toml
+├── LICENSE
+├── Makefile
 ├── README.md
-└── src/
-    ├── client.rs
-    ├── constants.rs
-    ├── error.rs
-    ├── i18n.rs
-    ├── lib.rs
-    ├── payment_url.rs
-    ├── qr.rs
-    ├── simulation.rs
-    ├── timefmt.rs
-    ├── transaction.rs
-    └── webhook.rs
+├── src/
+│   ├── client.rs
+│   ├── constants.rs
+│   ├── error.rs
+│   ├── i18n.rs
+│   ├── lib.rs
+│   ├── payment_url.rs
+│   ├── qr.rs
+│   ├── simulation.rs
+│   ├── timefmt.rs
+│   ├── transaction.rs
+│   └── webhook.rs
+└── tests/
+    └── sdk.rs
 ```
