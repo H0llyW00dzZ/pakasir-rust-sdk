@@ -148,10 +148,8 @@ jobs:
         if: ${{ matrix.rust != '1.85.0' }}
         run: cargo build --all-features --all-targets --verbose
 
-      # `windows-11-arm` has flaky test-runner support in some Rust toolchains.
-      # Build-only there until it stabilizes.
       - name: Run tests
-        if: ${{ matrix.rust != '1.85.0' && matrix.os != 'windows-11-arm' }}
+        if: ${{ matrix.rust != '1.85.0' }}
         run: cargo test --all-features --all-targets --verbose
 
       # ── Coverage (single canonical runner only) ──────────────────────────
