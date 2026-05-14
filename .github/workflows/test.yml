@@ -67,13 +67,61 @@ jobs:
         uses: actions/checkout@v6
 
       # Canonical dtolnay usage: `@master` is the action ref, and the actual
-      # Rust version comes from `with: toolchain:`. This matches what pe-sigscan
-      # uses and is the pattern recommended in the action's README.
+      # Rust version comes from `with: toolchain:`. This is the pattern the
+      # action's README recommends.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy, llvm-tools-preview
+
+      # Belt-and-suspenders for macOS: dtolnay/rust-toolchain@master has been
+      # observed to "succeed" on macos-latest (Apple Silicon) while leaving
+      # cargo as a half-initialized rustup-init shim. That makes the very
+      # next `cargo build` fail with "unexpected argument 'build'" before
+      # any real work runs.
+      #
+      # We verify cargo actually responds to `--version`; if not, we
+      # bootstrap rustup ourselves, set the requested toolchain as default,
+      # and re-add ~/.cargo/bin to PATH for the rest of the job.
+      - name: Verify Rust install and self-heal if broken
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Make sure subsequent steps see ~/.cargo/bin first.
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+
+          if cargo --version >/dev/null 2>&1 && rustc --version >/dev/null 2>&1; then
+            echo "::notice::cargo + rustc are working; dtolnay install OK."
+            cargo --version
+            rustc --version
+            rustup show || true
+            exit 0
+          fi
+
+          echo "::warning::cargo/rustc not usable after dtolnay install; bootstrapping manually."
+          which cargo || true
+          which rustc || true
+
+          # Install rustup itself (no toolchain yet) only if it's missing.
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --default-toolchain none --profile minimal
+          fi
+
+          rustup toolchain install "${{ matrix.rust }}" \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy \
+            --component llvm-tools-preview
+          rustup default "${{ matrix.rust }}"
+
+          # Fail loudly if it still doesn't work.
+          cargo --version
+          rustc --version
+          rustup show
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
