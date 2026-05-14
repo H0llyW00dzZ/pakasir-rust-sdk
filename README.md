@@ -3,6 +3,7 @@
 [![codecov](https://codecov.io/gh/H0llyW00dzZ/pakasir-rust-sdk/graph/badge.svg)](https://codecov.io/gh/H0llyW00dzZ/pakasir-rust-sdk)
 [![Crates.io](https://img.shields.io/crates/v/pakasir-sdk.svg)](https://crates.io/crates/pakasir-sdk)
 [![Documentation](https://docs.rs/pakasir-sdk/badge.svg)](https://docs.rs/pakasir-sdk)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/H0llyW00dzZ/pakasir-rust-sdk)
 
 Unofficial Rust port of the [Pakasir Go SDK](https://github.com/H0llyW00dzZ/pakasir-go-sdk) in this repository.
 
