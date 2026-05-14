@@ -212,3 +212,164 @@ impl QrGenerator {
         fs::write(path, png).map_err(|source| QrError::WriteFile { source })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+
+    #[test]
+    fn recovery_level_maps_to_every_ec_level() {
+        assert_eq!(EcLevel::from(RecoveryLevel::Low), EcLevel::L);
+        assert_eq!(EcLevel::from(RecoveryLevel::Medium), EcLevel::M);
+        assert_eq!(EcLevel::from(RecoveryLevel::High), EcLevel::Q);
+        assert_eq!(EcLevel::from(RecoveryLevel::Highest), EcLevel::H);
+    }
+
+    #[test]
+    fn options_default_matches_documented_values() {
+        let opts = Options::default();
+        assert_eq!(opts.size, 256);
+        assert_eq!(opts.recovery_level, RecoveryLevel::Medium);
+        assert_eq!(opts.foreground, [0, 0, 0, 255]);
+        assert_eq!(opts.background, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn options_setters_chain_and_apply() {
+        let opts = Options::default()
+            .with_size(512)
+            .with_recovery_level(RecoveryLevel::Highest)
+            .with_foreground([10, 20, 30, 255])
+            .with_background([240, 240, 240, 255]);
+
+        assert_eq!(opts.size, 512);
+        assert_eq!(opts.recovery_level, RecoveryLevel::Highest);
+        assert_eq!(opts.foreground, [10, 20, 30, 255]);
+        assert_eq!(opts.background, [240, 240, 240, 255]);
+    }
+
+    #[test]
+    fn options_with_size_zero_is_a_no_op() {
+        // Zero must not override the configured size — guard against accidental shrink.
+        let opts = Options::default().with_size(0);
+        assert_eq!(opts.size, 256);
+    }
+
+    #[test]
+    fn generator_default_uses_options_default() {
+        let gen_a = QrGenerator::default();
+        let gen_b = QrGenerator::new(Options::default());
+        assert_eq!(gen_a.options(), gen_b.options());
+    }
+
+    #[test]
+    fn generator_options_getter_returns_configured_options() {
+        let opts = Options::default().with_size(128);
+        let generator = QrGenerator::new(opts.clone());
+        assert_eq!(generator.options(), &opts);
+    }
+
+    #[test]
+    fn encode_rejects_empty_content() {
+        let err = QrGenerator::default().encode("").unwrap_err();
+        assert!(matches!(err, QrError::EmptyContent));
+        assert_eq!(err.to_string(), "qr: content must not be empty");
+    }
+
+    #[test]
+    fn encode_rejects_payload_too_large_for_recovery_level() {
+        // Highest recovery dramatically lowers capacity. A multi-KB payload
+        // will exceed the QR-spec maximum, surfacing as `EncodeFailed`.
+        let huge = "A".repeat(4_000);
+        let generator = QrGenerator::new(Options::default().with_recovery_level(RecoveryLevel::Highest));
+        let err = generator.encode(&huge).unwrap_err();
+        match err {
+            QrError::EncodeFailed { ref message } => assert!(!message.is_empty()),
+            other => panic!("expected EncodeFailed, got {other:?}"),
+        }
+        assert!(err.to_string().starts_with("qr: encode failed:"));
+    }
+
+    #[test]
+    fn write_streams_png_bytes() {
+        let generator = QrGenerator::new(Options::default().with_size(64));
+        let mut buffer = Vec::new();
+        generator.write(&mut buffer, "hello").unwrap();
+        assert_eq!(&buffer[..8], &PNG_SIGNATURE);
+    }
+
+    #[test]
+    fn write_surfaces_write_output_errors() {
+        struct FailingWriter;
+        impl std::io::Write for FailingWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("disk full"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let generator = QrGenerator::new(Options::default().with_size(64));
+        let mut sink = FailingWriter;
+        let err = generator.write(&mut sink, "hi").unwrap_err();
+        assert!(matches!(err, QrError::WriteOutput { .. }));
+        assert!(err.to_string().starts_with("qr: failed to write output:"));
+    }
+
+    #[test]
+    fn write_file_round_trips_through_temp_path() {
+        let mut path = env::temp_dir();
+        path.push(format!("pakasir-qr-test-{}.png", std::process::id()));
+        let generator = QrGenerator::new(Options::default().with_size(64));
+        generator.write_file(&path, "hello disk").unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[..8], &PNG_SIGNATURE);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn write_file_surfaces_write_file_errors() {
+        // Path with a directory component that cannot exist on any sane OS:
+        // a NUL byte segment.
+        let bad_path = if cfg!(windows) {
+            r"Z:\definitely\does\not\exist\nope.png".to_string()
+        } else {
+            "/proc/this/is/not/writable/nope.png".to_string()
+        };
+        let generator = QrGenerator::new(Options::default().with_size(64));
+        let err = generator.write_file(bad_path, "x").unwrap_err();
+        assert!(matches!(err, QrError::WriteFile { .. }));
+        assert!(err.to_string().starts_with("qr: failed to write file:"));
+    }
+
+    #[test]
+    fn write_propagates_encode_failures() {
+        // Empty input still goes through `encode` first; both write helpers
+        // must surface the resulting error rather than producing junk.
+        let generator = QrGenerator::default();
+        let mut buffer = Vec::new();
+        assert!(matches!(
+            generator.write(&mut buffer, "").unwrap_err(),
+            QrError::EmptyContent
+        ));
+
+        let mut tmp = env::temp_dir();
+        tmp.push("pakasir-qr-unused.png");
+        assert!(matches!(
+            generator.write_file(&tmp, "").unwrap_err(),
+            QrError::EmptyContent
+        ));
+    }
+
+    #[test]
+    fn png_write_error_display_includes_prefix() {
+        let inner = image::ImageError::IoError(std::io::Error::other("png boom"));
+        let err = QrError::PngWrite { source: inner };
+        assert!(err.to_string().starts_with("qr: failed to write png:"));
+    }
+}

@@ -183,3 +183,144 @@ impl Error {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_serde_error() -> serde_json::Error {
+        serde_json::from_slice::<serde_json::Value>(b"not json").unwrap_err()
+    }
+
+    #[test]
+    fn invalid_project_uses_localized_message() {
+        let err = Error::invalid_project(Language::English);
+        assert_eq!(err.to_string(), "project slug is required");
+
+        let err = Error::invalid_project(Language::Indonesian);
+        assert_eq!(err.to_string(), "slug proyek wajib diisi");
+    }
+
+    #[test]
+    fn invalid_api_key_uses_localized_message() {
+        let err = Error::invalid_api_key(Language::English);
+        assert_eq!(err.to_string(), "API key is required");
+
+        let err = Error::invalid_api_key(Language::Indonesian);
+        assert_eq!(err.to_string(), "API key wajib diisi");
+    }
+
+    #[test]
+    fn invalid_amount_uses_localized_message() {
+        let err = Error::invalid_amount(Language::English);
+        assert_eq!(err.to_string(), "amount must be greater than 0");
+
+        let err = Error::invalid_amount(Language::Indonesian);
+        assert_eq!(err.to_string(), "jumlah harus lebih dari 0");
+    }
+
+    #[test]
+    fn invalid_order_id_uses_localized_message() {
+        let err = Error::invalid_order_id(Language::English);
+        assert_eq!(err.to_string(), "order ID is required");
+
+        let err = Error::invalid_order_id(Language::Indonesian);
+        assert_eq!(err.to_string(), "ID pesanan wajib diisi");
+    }
+
+    #[test]
+    fn encode_json_wraps_source_error_with_localized_prefix() {
+        let err = Error::encode_json(Language::English, make_serde_error());
+        let text = err.to_string();
+        assert!(
+            text.starts_with("failed to encode request as JSON: "),
+            "unexpected: {text}"
+        );
+        assert!(err.source().is_some());
+
+        let err = Error::encode_json(Language::Indonesian, make_serde_error());
+        assert!(
+            err.to_string()
+                .starts_with("gagal mengenkode permintaan sebagai JSON: ")
+        );
+    }
+
+    #[test]
+    fn decode_json_wraps_source_error_with_localized_prefix() {
+        let err = Error::decode_json(Language::English, make_serde_error());
+        let text = err.to_string();
+        assert!(text.starts_with("failed to decode response: "), "unexpected: {text}");
+        assert!(err.source().is_some());
+
+        let err = Error::decode_json(Language::Indonesian, make_serde_error());
+        assert!(err.to_string().starts_with("gagal mendekode respons: "));
+    }
+
+    #[test]
+    fn request_failed_uses_permanent_template() {
+        let err = Error::request_failed(
+            Language::English,
+            Box::new(std::io::Error::other("boom")),
+        );
+        assert!(
+            err.to_string()
+                .starts_with("request failed due to permanent error: ")
+        );
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn request_failed_after_retries_substitutes_count() {
+        let err = Error::request_failed_after_retries(
+            Language::English,
+            3,
+            Box::new(std::io::Error::other("flaky")),
+        );
+        assert!(err.to_string().contains("after 3 retries"));
+
+        let err = Error::request_failed_after_retries(
+            Language::Indonesian,
+            5,
+            Box::new(std::io::Error::other("flaky")),
+        );
+        assert!(err.to_string().contains("setelah 5 percobaan ulang"));
+    }
+
+    #[test]
+    fn api_status_returns_status_for_api_variant() {
+        let err = Error::Api {
+            status: StatusCode::BAD_REQUEST,
+            body: "bad".into(),
+        };
+        assert_eq!(err.api_status(), Some(StatusCode::BAD_REQUEST));
+        assert!(err.to_string().contains("status 400"));
+    }
+
+    #[test]
+    fn api_status_returns_none_for_other_variants() {
+        let err = Error::invalid_project(Language::English);
+        assert_eq!(err.api_status(), None);
+
+        let err = Error::ResponseTooLarge { limit: 1024 };
+        assert_eq!(err.api_status(), None);
+        assert!(err.to_string().contains("1024"));
+    }
+
+    #[test]
+    fn build_request_display_includes_source() {
+        let parse_err = url::Url::parse("not a url").unwrap_err();
+        let err = Error::BuildRequest { source: parse_err };
+        assert!(err.to_string().contains("failed to create request"));
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn invalid_payment_method_display_is_message() {
+        // Currently unused at runtime but kept on the surface; cover its
+        // Display so a future regression in the enum order is caught.
+        let err = Error::InvalidPaymentMethod {
+            message: "bogus".into(),
+        };
+        assert_eq!(err.to_string(), "bogus");
+    }
+}

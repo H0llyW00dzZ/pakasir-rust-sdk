@@ -168,3 +168,52 @@ impl core::fmt::Display for TransactionStatus {
         f.write_str(self.as_str())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_agent_has_expected_shape() {
+        let ua = user_agent();
+        assert!(ua.starts_with(&format!("{SDK_NAME}/{SDK_VERSION}")));
+        assert!(ua.contains(SDK_REPOSITORY));
+        assert!(ua.ends_with(")"));
+    }
+
+    #[test]
+    fn payment_method_as_str_covers_every_variant() {
+        let cases = [
+            (PaymentMethod::CimbNiagaVa, "cimb_niaga_va"),
+            (PaymentMethod::BniVa, "bni_va"),
+            (PaymentMethod::Qris, "qris"),
+            (PaymentMethod::SampoernaVa, "sampoerna_va"),
+            (PaymentMethod::BncVa, "bnc_va"),
+            (PaymentMethod::MaybankVa, "maybank_va"),
+            (PaymentMethod::PermataVa, "permata_va"),
+            (PaymentMethod::AtmBersamaVa, "atm_bersama_va"),
+            (PaymentMethod::ArthaGrahaVa, "artha_graha_va"),
+            (PaymentMethod::BriVa, "bri_va"),
+            (PaymentMethod::Paypal, "paypal"),
+        ];
+        for (variant, wire) in cases {
+            assert_eq!(variant.as_str(), wire);
+            assert_eq!(format!("{variant}"), wire);
+        }
+    }
+
+    #[test]
+    fn transaction_status_as_str_covers_every_variant() {
+        let cases = [
+            (TransactionStatus::Completed, "completed"),
+            (TransactionStatus::Pending, "pending"),
+            (TransactionStatus::Expired, "expired"),
+            (TransactionStatus::Cancelled, "cancelled"),
+            (TransactionStatus::Canceled, "canceled"),
+        ];
+        for (variant, wire) in cases {
+            assert_eq!(variant.as_str(), wire);
+            assert_eq!(format!("{variant}"), wire);
+        }
+    }
+}
