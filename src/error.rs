@@ -249,7 +249,10 @@ mod tests {
     fn decode_json_wraps_source_error_with_localized_prefix() {
         let err = Error::decode_json(Language::English, make_serde_error());
         let text = err.to_string();
-        assert!(text.starts_with("failed to decode response: "), "unexpected: {text}");
+        assert!(
+            text.starts_with("failed to decode response: "),
+            "unexpected: {text}"
+        );
         assert!(err.source().is_some());
 
         let err = Error::decode_json(Language::Indonesian, make_serde_error());
@@ -258,10 +261,7 @@ mod tests {
 
     #[test]
     fn request_failed_uses_permanent_template() {
-        let err = Error::request_failed(
-            Language::English,
-            Box::new(std::io::Error::other("boom")),
-        );
+        let err = Error::request_failed(Language::English, Box::new(std::io::Error::other("boom")));
         assert!(
             err.to_string()
                 .starts_with("request failed due to permanent error: ")

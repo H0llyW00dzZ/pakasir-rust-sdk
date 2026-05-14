@@ -284,7 +284,8 @@ mod tests {
         // Highest recovery dramatically lowers capacity. A multi-KB payload
         // will exceed the QR-spec maximum, surfacing as `EncodeFailed`.
         let huge = "A".repeat(4_000);
-        let generator = QrGenerator::new(Options::default().with_recovery_level(RecoveryLevel::Highest));
+        let generator =
+            QrGenerator::new(Options::default().with_recovery_level(RecoveryLevel::Highest));
         let err = generator.encode(&huge).unwrap_err();
         match err {
             QrError::EncodeFailed { ref message } => assert!(!message.is_empty()),
