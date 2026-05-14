@@ -1,0 +1,19 @@
+# Basic dependabot.yml file for a Rust project using Cargo.
+
+version: 2
+updates:
+  # Maintain dependencies declared in Cargo.toml.
+  - package-ecosystem: "cargo"
+    directory: "/" # location of Cargo.toml
+    schedule:
+      interval: "daily" # how often to check for updates
+
+    # Optional: only open pull requests against the master branch.
+    target-branch: "master"
+
+  # GitHub Actions used by the workflows under .github/workflows/.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    target-branch: "master"

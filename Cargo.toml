@@ -1,0 +1,46 @@
+[package]
+name = "pakasir-sdk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Unofficial async Rust SDK for the Pakasir payment gateway (transactions, simulation, webhooks, payment URLs, QRIS QR codes)."
+repository = "https://github.com/H0llyW00dzZ/pakasir-rust-sdk"
+homepage = "https://github.com/H0llyW00dzZ/pakasir-rust-sdk"
+documentation = "https://docs.rs/pakasir-sdk"
+readme = "README.md"
+keywords = ["pakasir", "payment", "payment-gateway", "qris", "sdk"]
+categories = ["api-bindings", "finance", "web-programming::http-client"]
+
+[features]
+# Everything is on by default so adopting the SDK is a one-liner.
+# Opt out with `default-features = false` and re-enable only what you need.
+default = ["qr", "simulation", "webhook"]
+
+# QRIS / QR code PNG generation. Pulls in `qrcode` and `image`.
+qr = ["dep:qrcode", "dep:image"]
+# Sandbox payment simulation endpoint. Sandbox/test use only.
+simulation = []
+# Webhook payload parsing and validation.
+webhook = []
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+httpdate = "1.0"
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+qrcode = { version = "0.14", features = ["image"], optional = true }
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "time"] }
+url = "2.5"
+
+[dev-dependencies]
+axum = "0.8"
+
+# docs.rs: build with all features so every gated module shows up.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
