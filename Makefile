@@ -14,8 +14,27 @@
 
 .PHONY: all header build test test-doc test-cover clippy fmt fmt-fix doc clean deps
 
+# Detect Windows so we can pick the right shell builtins. `make` on Windows
+# launches `cmd.exe` for recipes, which has no `printf` and no `rm`.
+ifeq ($(OS),Windows_NT)
+    IS_WINDOWS := 1
+else
+    IS_WINDOWS :=
+endif
+
 # Print ASCII art banner.
 header:
+ifdef IS_WINDOWS
+	@echo.
+	@echo   ____        _               _
+	@echo  ^| _ \ __ _ ^| ^| __ __ _ ___ ^(_^) _ __
+	@echo  ^| ^|_) / _` ^|^| ^|/ // _` / __^|^| ^|^| '__^|
+	@echo  ^| __/ ^(_^| ^|^|   ^<^| ^(_^| \__ \^| ^|^| ^|
+	@echo  ^|_^|   \__,_^|^|_^|\_\\__,_^|___/^|_^|^|_^|
+	@echo.
+	@echo   Rust SDK by H0llyW00dzZ ^(@github.com/H0llyW00dzZ^)
+	@echo.
+else
 	@printf '%s\n' '  ____        _               _        '
 	@printf '%s\n' ' |  _ \ __ _ | | __ __ _ ___ (_) _ __  '
 	@printf '%s\n' ' | |_) / _` || |/ // _` / __|| || '"'"'__| '
@@ -24,6 +43,7 @@ header:
 	@printf '%s\n' '                                        '
 	@printf '%s\n' '  Rust SDK by H0llyW00dzZ (@github.com/H0llyW00dzZ)'
 	@echo ""
+endif
 
 # Default target.
 all: header build test
