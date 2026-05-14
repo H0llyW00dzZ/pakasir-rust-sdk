@@ -283,10 +283,10 @@ mod tests {
     #[test]
     fn parse_bytes_rejects_malformed_json() {
         let err = Parser::new().parse_bytes(b"not json").unwrap_err();
-        match err {
-            WebhookError::DecodeBody(message) => assert!(!message.is_empty()),
-            other => panic!("expected DecodeBody, got {other:?}"),
-        }
+        assert!(
+            matches!(&err, WebhookError::DecodeBody(message) if !message.is_empty()),
+            "expected non-empty DecodeBody, got: {err:?}"
+        );
     }
 
     #[test]
@@ -319,10 +319,10 @@ mod tests {
         }
 
         let err = Parser::new().parse_reader(FailingReader).unwrap_err();
-        match err {
-            WebhookError::ReadBody(message) => assert!(message.contains("reader broke")),
-            other => panic!("expected ReadBody, got {other:?}"),
-        }
+        assert!(
+            matches!(&err, WebhookError::ReadBody(message) if message.contains("reader broke")),
+            "expected ReadBody containing 'reader broke', got: {err:?}"
+        );
     }
 
     #[test]

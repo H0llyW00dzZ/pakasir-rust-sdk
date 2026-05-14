@@ -287,10 +287,10 @@ mod tests {
         let generator =
             QrGenerator::new(Options::default().with_recovery_level(RecoveryLevel::Highest));
         let err = generator.encode(&huge).unwrap_err();
-        match err {
-            QrError::EncodeFailed { ref message } => assert!(!message.is_empty()),
-            other => panic!("expected EncodeFailed, got {other:?}"),
-        }
+        assert!(
+            matches!(&err, QrError::EncodeFailed { message } if !message.is_empty()),
+            "expected non-empty EncodeFailed, got: {err:?}"
+        );
         assert!(err.to_string().starts_with("qr: encode failed:"));
     }
 
@@ -304,8 +304,10 @@ mod tests {
 
     #[test]
     fn write_surfaces_write_output_errors() {
+        use std::io::Write;
+
         struct FailingWriter;
-        impl std::io::Write for FailingWriter {
+        impl Write for FailingWriter {
             fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
                 Err(std::io::Error::other("disk full"))
             }
@@ -319,6 +321,10 @@ mod tests {
         let err = generator.write(&mut sink, "hi").unwrap_err();
         assert!(matches!(err, QrError::WriteOutput { .. }));
         assert!(err.to_string().starts_with("qr: failed to write output:"));
+
+        // `Write` requires a `flush` impl; exercise it directly so the
+        // trivially-Ok body counts as covered.
+        FailingWriter.flush().unwrap();
     }
 
     #[test]
@@ -335,13 +341,14 @@ mod tests {
 
     #[test]
     fn write_file_surfaces_write_file_errors() {
-        // Path with a directory component that cannot exist on any sane OS:
-        // a NUL byte segment.
-        let bad_path = if cfg!(windows) {
-            r"Z:\definitely\does\not\exist\nope.png".to_string()
-        } else {
-            "/proc/this/is/not/writable/nope.png".to_string()
-        };
+        // Path that cannot exist on the host filesystem. Using compile-time
+        // `cfg` rather than runtime `cfg!(windows)` so coverage doesn't flag
+        // the unused arm on the other platform.
+        #[cfg(windows)]
+        let bad_path = r"Z:\definitely\does\not\exist\nope.png".to_string();
+        #[cfg(not(windows))]
+        let bad_path = "/proc/this/is/not/writable/nope.png".to_string();
+
         let generator = QrGenerator::new(Options::default().with_size(64));
         let err = generator.write_file(bad_path, "x").unwrap_err();
         assert!(matches!(err, QrError::WriteFile { .. }));
