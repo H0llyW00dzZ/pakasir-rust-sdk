@@ -87,3 +87,119 @@ pub fn get(lang: Language, key: MessageKey) -> &'static str {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `(Language, MessageKey)` pair must resolve to a non-empty,
+    /// distinct-per-language string. The exhaustive table also guards
+    /// against accidental message reuse across languages.
+    #[test]
+    fn every_combination_resolves_to_a_unique_string() {
+        let keys = [
+            MessageKey::InvalidProject,
+            MessageKey::InvalidApiKey,
+            MessageKey::InvalidAmount,
+            MessageKey::InvalidOrderId,
+            MessageKey::InvalidPaymentMethod,
+            MessageKey::FailedToEncode,
+            MessageKey::FailedToDecode,
+            MessageKey::RequestFailedPermanent,
+            MessageKey::RequestFailedAfterRetries,
+        ];
+
+        for key in keys {
+            let en = get(Language::English, key);
+            let id = get(Language::Indonesian, key);
+            assert!(!en.is_empty(), "missing English for {key:?}");
+            assert!(!id.is_empty(), "missing Indonesian for {key:?}");
+            assert_ne!(en, id, "English and Indonesian must differ for {key:?}");
+        }
+    }
+
+    #[test]
+    fn english_messages_match_expected_text() {
+        assert_eq!(
+            get(Language::English, MessageKey::InvalidProject),
+            "project slug is required"
+        );
+        assert_eq!(
+            get(Language::English, MessageKey::InvalidApiKey),
+            "API key is required"
+        );
+        assert_eq!(
+            get(Language::English, MessageKey::InvalidAmount),
+            "amount must be greater than 0"
+        );
+        assert_eq!(
+            get(Language::English, MessageKey::InvalidOrderId),
+            "order ID is required"
+        );
+        assert_eq!(
+            get(Language::English, MessageKey::InvalidPaymentMethod),
+            "unsupported payment method: %s"
+        );
+        assert_eq!(
+            get(Language::English, MessageKey::FailedToEncode),
+            "failed to encode request as JSON"
+        );
+        assert_eq!(
+            get(Language::English, MessageKey::FailedToDecode),
+            "failed to decode response"
+        );
+        assert_eq!(
+            get(Language::English, MessageKey::RequestFailedPermanent),
+            "request failed due to permanent error"
+        );
+        assert_eq!(
+            get(Language::English, MessageKey::RequestFailedAfterRetries),
+            "request failed after %d retries"
+        );
+    }
+
+    #[test]
+    fn indonesian_messages_match_expected_text() {
+        assert_eq!(
+            get(Language::Indonesian, MessageKey::InvalidProject),
+            "slug proyek wajib diisi"
+        );
+        assert_eq!(
+            get(Language::Indonesian, MessageKey::InvalidApiKey),
+            "API key wajib diisi"
+        );
+        assert_eq!(
+            get(Language::Indonesian, MessageKey::InvalidAmount),
+            "jumlah harus lebih dari 0"
+        );
+        assert_eq!(
+            get(Language::Indonesian, MessageKey::InvalidOrderId),
+            "ID pesanan wajib diisi"
+        );
+        assert_eq!(
+            get(Language::Indonesian, MessageKey::InvalidPaymentMethod),
+            "metode pembayaran tidak didukung: %s"
+        );
+        assert_eq!(
+            get(Language::Indonesian, MessageKey::FailedToEncode),
+            "gagal mengenkode permintaan sebagai JSON"
+        );
+        assert_eq!(
+            get(Language::Indonesian, MessageKey::FailedToDecode),
+            "gagal mendekode respons"
+        );
+        assert_eq!(
+            get(Language::Indonesian, MessageKey::RequestFailedPermanent),
+            "permintaan gagal karena kesalahan permanen"
+        );
+        assert_eq!(
+            get(Language::Indonesian, MessageKey::RequestFailedAfterRetries),
+            "permintaan gagal setelah %d percobaan ulang"
+        );
+    }
+
+    #[test]
+    fn language_default_is_english() {
+        assert_eq!(Language::default(), Language::English);
+    }
+}

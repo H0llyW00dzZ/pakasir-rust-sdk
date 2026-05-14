@@ -530,3 +530,305 @@ fn parse_retry_after(value: Option<&HeaderValue>) -> Option<Duration> {
     let parsed = httpdate::parse_http_date(raw).ok()?;
     parsed.duration_since(std::time::SystemTime::now()).ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::StatusCode;
+
+    #[test]
+    fn client_new_yields_same_defaults_as_builder() {
+        let a = Client::new("p", "k");
+        let b = Client::builder("p", "k").build();
+        assert_eq!(a.project(), b.project());
+        assert_eq!(a.api_key(), b.api_key());
+        assert_eq!(a.language(), b.language());
+        assert_eq!(a.retries, b.retries);
+        assert_eq!(a.retry_wait_min, b.retry_wait_min);
+        assert_eq!(a.retry_wait_max, b.retry_wait_max);
+        assert_eq!(a.max_response_size, b.max_response_size);
+        assert_eq!(a.base_url, b.base_url);
+    }
+
+    #[test]
+    fn client_getters_return_configured_values() {
+        let client = Client::builder("proj", "key").build();
+        assert_eq!(client.project(), "proj");
+        assert_eq!(client.api_key(), "key");
+        assert_eq!(client.language(), Language::English);
+    }
+
+    #[test]
+    fn builder_base_url_strips_trailing_slashes() {
+        let client = Client::builder("p", "k").base_url("https://x/").build();
+        assert_eq!(client.base_url, "https://x");
+
+        let client = Client::builder("p", "k").base_url("https://x///").build();
+        assert_eq!(client.base_url, "https://x");
+    }
+
+    #[test]
+    fn builder_http_client_swaps_underlying_reqwest_client() {
+        let custom = reqwest::Client::builder().build().unwrap();
+        // No public way to identify the inner client, but build() must not
+        // panic and the resulting Client must be usable.
+        let _ = Client::builder("p", "k").http_client(custom).build();
+    }
+
+    #[test]
+    fn builder_timeout_zero_is_a_no_op() {
+        let client = Client::builder("p", "k").timeout(Duration::ZERO).build();
+        // The Client doesn't expose its timeout; we just verify the builder
+        // chain executes the no-op branch without panicking.
+        let _ = client;
+    }
+
+    #[test]
+    fn builder_timeout_applies_positive_durations() {
+        let _client = Client::builder("p", "k")
+            .timeout(Duration::from_secs(7))
+            .build();
+    }
+
+    #[test]
+    fn builder_language_overrides_default() {
+        let client = Client::builder("p", "k")
+            .language(Language::Indonesian)
+            .build();
+        assert_eq!(client.language(), Language::Indonesian);
+    }
+
+    #[test]
+    fn builder_retries_overrides_default() {
+        let client = Client::builder("p", "k").retries(7).build();
+        assert_eq!(client.retries, 7);
+
+        let client = Client::builder("p", "k").retries(0).build();
+        assert_eq!(client.retries, 0);
+    }
+
+    #[test]
+    fn builder_retry_wait_zero_durations_clamp_to_one_millisecond() {
+        let client = Client::builder("p", "k")
+            .retry_wait(Duration::ZERO, Duration::ZERO)
+            .build();
+        assert_eq!(client.retry_wait_min, Duration::from_millis(1));
+        assert_eq!(client.retry_wait_max, Duration::from_millis(1));
+    }
+
+    #[test]
+    fn builder_retry_wait_swaps_min_and_max_when_inverted() {
+        let client = Client::builder("p", "k")
+            .retry_wait(Duration::from_secs(10), Duration::from_secs(1))
+            .build();
+        // 10s > 1s → should be swapped so min < max.
+        assert_eq!(client.retry_wait_min, Duration::from_secs(1));
+        assert_eq!(client.retry_wait_max, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn builder_retry_wait_keeps_already_ordered_pair() {
+        let client = Client::builder("p", "k")
+            .retry_wait(Duration::from_millis(100), Duration::from_millis(500))
+            .build();
+        assert_eq!(client.retry_wait_min, Duration::from_millis(100));
+        assert_eq!(client.retry_wait_max, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn builder_max_response_size_zero_is_a_no_op() {
+        let client = Client::builder("p", "k").max_response_size(0).build();
+        assert_eq!(client.max_response_size, DEFAULT_MAX_RESPONSE_SIZE);
+    }
+
+    #[test]
+    fn builder_max_response_size_overrides_default() {
+        let client = Client::builder("p", "k").max_response_size(512).build();
+        assert_eq!(client.max_response_size, 512);
+    }
+
+    #[cfg(feature = "qr")]
+    #[test]
+    fn builder_qr_options_propagate_to_client() {
+        use crate::qr::{Options as QrOpts, RecoveryLevel};
+        let opts = QrOpts::default()
+            .with_size(384)
+            .with_recovery_level(RecoveryLevel::High);
+        let client = Client::builder("p", "k").qr_options(opts.clone()).build();
+        assert_eq!(client.qr().options(), &opts);
+    }
+
+    #[test]
+    fn is_retryable_status_matches_documented_set() {
+        assert!(is_retryable_status(StatusCode::TOO_MANY_REQUESTS));
+        assert!(is_retryable_status(StatusCode::BAD_GATEWAY));
+        assert!(is_retryable_status(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(is_retryable_status(StatusCode::GATEWAY_TIMEOUT));
+    }
+
+    #[test]
+    fn is_retryable_status_excludes_other_statuses() {
+        for code in [
+            StatusCode::OK,
+            StatusCode::BAD_REQUEST,
+            StatusCode::NOT_FOUND,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::NOT_IMPLEMENTED,
+        ] {
+            assert!(!is_retryable_status(code), "must NOT retry on {code}");
+        }
+    }
+
+    #[test]
+    fn parse_retry_after_returns_none_for_missing_header() {
+        assert!(parse_retry_after(None).is_none());
+    }
+
+    #[test]
+    fn parse_retry_after_returns_none_for_empty_value() {
+        let header = HeaderValue::from_static("");
+        assert!(parse_retry_after(Some(&header)).is_none());
+
+        let header = HeaderValue::from_static("   ");
+        assert!(parse_retry_after(Some(&header)).is_none());
+    }
+
+    #[test]
+    fn parse_retry_after_returns_none_for_unparseable_value() {
+        let header = HeaderValue::from_static("not a real value");
+        assert!(parse_retry_after(Some(&header)).is_none());
+    }
+
+    #[test]
+    fn parse_retry_after_parses_delta_seconds() {
+        let header = HeaderValue::from_static("12");
+        assert_eq!(
+            parse_retry_after(Some(&header)),
+            Some(Duration::from_secs(12))
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_caps_delta_seconds_at_24h() {
+        let header = HeaderValue::from_static("999999"); // way more than 24h
+        assert_eq!(
+            parse_retry_after(Some(&header)),
+            Some(Duration::from_secs(86_400))
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_parses_http_date_in_the_future() {
+        // Build a date a long way in the future so the duration is positive
+        // regardless of clock skew.
+        let target = std::time::SystemTime::now() + Duration::from_secs(60);
+        let formatted = httpdate::fmt_http_date(target);
+        let header = HeaderValue::from_str(&formatted).unwrap();
+        let parsed = parse_retry_after(Some(&header)).expect("future HTTP-date should parse");
+        // HTTP-date only carries second precision, so allow a small window.
+        assert!(parsed <= Duration::from_secs(61));
+    }
+
+    #[test]
+    fn parse_retry_after_returns_none_for_http_date_in_the_past() {
+        let header = HeaderValue::from_static("Wed, 21 Oct 1970 07:28:00 GMT");
+        assert!(parse_retry_after(Some(&header)).is_none());
+    }
+
+    #[test]
+    fn calculate_backoff_floors_at_retry_wait_min() {
+        let client = Client::builder("p", "k")
+            .retry_wait(Duration::from_millis(10), Duration::from_millis(20))
+            .build();
+        // attempt = 0 → max_wait == retry_wait_min → return min directly
+        assert_eq!(client.calculate_backoff(0), Duration::from_millis(10));
+    }
+
+    #[test]
+    fn calculate_backoff_stays_within_configured_bounds() {
+        let client = Client::builder("p", "k")
+            .retry_wait(Duration::from_millis(10), Duration::from_millis(20))
+            .build();
+        for attempt in 1..=5_usize {
+            let wait = client.calculate_backoff(attempt);
+            assert!(
+                wait >= Duration::from_millis(10),
+                "attempt={attempt} wait={wait:?}"
+            );
+            assert!(
+                wait <= Duration::from_millis(20),
+                "attempt={attempt} wait={wait:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn calculate_backoff_handles_extreme_attempt_count() {
+        let client = Client::builder("p", "k")
+            .retry_wait(Duration::from_millis(10), Duration::from_secs(30))
+            .build();
+        // Guard against shift overflow on huge attempt counts.
+        let wait = client.calculate_backoff(64);
+        assert!(wait <= Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn do_request_rejects_empty_project() {
+        let client = Client::builder("", "k").retries(0).build();
+        let err = client
+            .do_request(Method::GET, "/x", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidProject { .. }));
+    }
+
+    #[tokio::test]
+    async fn do_request_rejects_empty_api_key() {
+        let client = Client::builder("p", "").retries(0).build();
+        let err = client
+            .do_request(Method::GET, "/x", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidApiKey { .. }));
+    }
+
+    #[tokio::test]
+    async fn do_request_surfaces_build_url_failures() {
+        // Configure a base URL that does not parse as a URL on its own.
+        // `Client::do_request` glues `base_url + path` and parses the result.
+        let client = Client::builder("p", "k")
+            .base_url("not a url")
+            .retries(0)
+            .build();
+        let err = client
+            .do_request(Method::GET, "/path", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::BuildRequest { .. }));
+    }
+
+    #[tokio::test]
+    async fn wait_for_retry_returns_immediately_on_first_attempt() {
+        let client = Client::builder("p", "k")
+            .retry_wait(Duration::from_secs(60), Duration::from_secs(60))
+            .build();
+        // Even with a huge retry_wait, attempt == 0 must not sleep.
+        let start = std::time::Instant::now();
+        client.wait_for_retry(0, None).await;
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn wait_for_retry_honors_retry_after_hint_clamped_to_max() {
+        let client = Client::builder("p", "k")
+            .retry_wait(Duration::from_millis(1), Duration::from_millis(5))
+            .build();
+        // Hint larger than retry_wait_max gets clamped, so this sleeps ~5ms.
+        let start = std::time::Instant::now();
+        client
+            .wait_for_retry(1, Some(Duration::from_secs(60)))
+            .await;
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+}

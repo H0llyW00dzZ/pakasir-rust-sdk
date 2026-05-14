@@ -335,3 +335,306 @@ fn qr_generator_returns_png_bytes() {
     assert!(!png.is_empty());
     assert_eq!(&png[..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
 }
+
+/// Server replies with a retryable 503 on every attempt. After exhausting the
+/// configured retries the client must surface
+/// [`pakasir_sdk::Error::RequestFailedAfterRetries`].
+///
+/// Covers `Client::do_request`'s retry-exhaustion tail
+/// (`request_failed_after_retries`).
+#[tokio::test]
+async fn client_exhausts_retries_and_surfaces_aggregated_error() {
+    #[derive(Clone)]
+    struct AppState {
+        attempts: Arc<AtomicUsize>,
+    }
+
+    async fn handler(State(state): State<AppState>) -> impl IntoResponse {
+        state.attempts.fetch_add(1, Ordering::SeqCst);
+        (StatusCode::SERVICE_UNAVAILABLE, "still down")
+    }
+
+    let state = AppState {
+        attempts: Arc::new(AtomicUsize::new(0)),
+    };
+    let app = Router::new()
+        .route("/test", any(handler))
+        .with_state(state.clone());
+    let (base_url, handle) = spawn_app(app).await;
+
+    let client = Client::builder("test-project", "test-key")
+        .base_url(base_url)
+        .retries(2)
+        .retry_wait(Duration::from_millis(1), Duration::from_millis(2))
+        .build();
+
+    let err = client
+        .do_request(reqwest::Method::GET, "/test", None)
+        .await
+        .unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.contains("after 2 retries"),
+        "expected retry-exhaustion message, got: {text}"
+    );
+    // Initial attempt + 2 retries = 3 total hits.
+    assert_eq!(state.attempts.load(Ordering::SeqCst), 3);
+
+    handle.abort();
+}
+
+/// Server replies with HTTP 429 (Too Many Requests). The SDK must classify
+/// this as transient, honor the configured retries, and eventually succeed
+/// when the server stops failing.
+#[tokio::test]
+async fn client_retries_on_429_too_many_requests() {
+    #[derive(Clone)]
+    struct AppState {
+        attempts: Arc<AtomicUsize>,
+    }
+
+    async fn handler(State(state): State<AppState>) -> impl IntoResponse {
+        let attempt = state.attempts.fetch_add(1, Ordering::SeqCst);
+        if attempt == 0 {
+            return (StatusCode::TOO_MANY_REQUESTS, "slow down").into_response();
+        }
+        (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+    }
+
+    let state = AppState {
+        attempts: Arc::new(AtomicUsize::new(0)),
+    };
+    let app = Router::new()
+        .route("/test", any(handler))
+        .with_state(state.clone());
+    let (base_url, handle) = spawn_app(app).await;
+
+    let client = Client::builder("test-project", "test-key")
+        .base_url(base_url)
+        .retries(2)
+        .retry_wait(Duration::from_millis(1), Duration::from_millis(5))
+        .build();
+
+    client
+        .do_request(reqwest::Method::GET, "/test", None)
+        .await
+        .unwrap();
+    assert_eq!(state.attempts.load(Ordering::SeqCst), 2);
+
+    handle.abort();
+}
+
+/// Server replies with HTTP 504 (Gateway Timeout) once. The SDK must retry
+/// and eventually succeed — same shape as the 429 test but exercises the
+/// other end of [`is_retryable_status`].
+#[tokio::test]
+async fn client_retries_on_504_gateway_timeout() {
+    #[derive(Clone)]
+    struct AppState {
+        attempts: Arc<AtomicUsize>,
+    }
+
+    async fn handler(State(state): State<AppState>) -> impl IntoResponse {
+        let attempt = state.attempts.fetch_add(1, Ordering::SeqCst);
+        if attempt == 0 {
+            return (StatusCode::GATEWAY_TIMEOUT, "timed out").into_response();
+        }
+        (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+    }
+
+    let state = AppState {
+        attempts: Arc::new(AtomicUsize::new(0)),
+    };
+    let app = Router::new()
+        .route("/test", any(handler))
+        .with_state(state.clone());
+    let (base_url, handle) = spawn_app(app).await;
+
+    let client = Client::builder("test-project", "test-key")
+        .base_url(base_url)
+        .retries(2)
+        .retry_wait(Duration::from_millis(1), Duration::from_millis(5))
+        .build();
+
+    client
+        .do_request(reqwest::Method::GET, "/test", None)
+        .await
+        .unwrap();
+    assert_eq!(state.attempts.load(Ordering::SeqCst), 2);
+
+    handle.abort();
+}
+
+/// Server replies with `Retry-After: 0` so the hint is honored but does not
+/// stall the test. Covers `parse_retry_after` happy path and
+/// `wait_for_retry`'s "hint wins" branch.
+#[tokio::test]
+async fn client_honors_retry_after_header() {
+    #[derive(Clone)]
+    struct AppState {
+        attempts: Arc<AtomicUsize>,
+    }
+
+    async fn handler(State(state): State<AppState>) -> impl IntoResponse {
+        let attempt = state.attempts.fetch_add(1, Ordering::SeqCst);
+        if attempt == 0 {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [("Retry-After", "0")],
+                "wait briefly",
+            )
+                .into_response();
+        }
+        (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+    }
+
+    let state = AppState {
+        attempts: Arc::new(AtomicUsize::new(0)),
+    };
+    let app = Router::new()
+        .route("/test", any(handler))
+        .with_state(state.clone());
+    let (base_url, handle) = spawn_app(app).await;
+
+    let client = Client::builder("test-project", "test-key")
+        .base_url(base_url)
+        .retries(2)
+        .retry_wait(Duration::from_millis(1), Duration::from_millis(5))
+        .build();
+
+    client
+        .do_request(reqwest::Method::GET, "/test", None)
+        .await
+        .unwrap();
+    assert_eq!(state.attempts.load(Ordering::SeqCst), 2);
+
+    handle.abort();
+}
+
+/// Point the client at a TCP port nobody is listening on so reqwest's
+/// `request.send().await` fails at the transport layer. This drives
+/// `execute_attempt`'s `Err` arm and the `is_retryable_transport` check.
+///
+/// Two robustness notes:
+/// 1. We use the literal loopback IP + port 1 instead of `bind`/`drop` so
+///    there is no race window where another process could grab the port
+///    between the listener being released and our test connecting.
+/// 2. We accept either `RequestFailedAfterRetries` (transient transport
+///    error, retried, exhausted) or `RequestFailed` (classified as
+///    non-retryable). Both are valid landings for this code path; the
+///    test's job is to exercise transport-error handling, not to pin the
+///    retry classification of every libc/Rust/reqwest version.
+#[tokio::test]
+async fn client_retries_then_fails_on_transport_errors() {
+    let client = Client::builder("test-project", "test-key")
+        // Port 1 on loopback: literal IP skips DNS, nothing listens, OS
+        // returns ECONNREFUSED immediately on every supported platform.
+        .base_url("http://127.0.0.1:1")
+        .retries(1)
+        .retry_wait(Duration::from_millis(1), Duration::from_millis(2))
+        .timeout(Duration::from_millis(500))
+        .build();
+
+    let err = client
+        .do_request(reqwest::Method::GET, "/test", None)
+        .await
+        .unwrap_err();
+
+    // The crate's `Error` is re-exported at the root; match on its variants
+    // rather than asserting on stringified messages.
+    use pakasir_sdk::Error;
+    assert!(
+        matches!(
+            &err,
+            Error::RequestFailedAfterRetries { .. } | Error::RequestFailed { .. }
+        ),
+        "expected a transport-level Error::RequestFailed[AfterRetries], got: {err:?}"
+    );
+}
+
+/// Verify the `Client::qr()` accessor and the `qr_options` builder pipe
+/// configuration through end-to-end. This is the only path that exercises
+/// the embedded `QrGenerator` on `Client`.
+#[cfg(feature = "qr")]
+#[test]
+fn client_qr_accessor_returns_configured_generator() {
+    let opts = qr::Options::default()
+        .with_size(192)
+        .with_recovery_level(qr::RecoveryLevel::High);
+    let client = Client::builder("test-project", "test-key")
+        .qr_options(opts.clone())
+        .build();
+
+    assert_eq!(client.qr().options(), &opts);
+
+    let png = client.qr().encode("payload").unwrap();
+    assert_eq!(&png[..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
+}
+
+/// Server returns a 200 with a non-JSON body. The transaction service must
+/// surface `Error::DecodeJson` (the `serde_json::from_slice` error arm in
+/// `create`).
+#[tokio::test]
+async fn transaction_create_surfaces_decode_errors() {
+    async fn create() -> impl IntoResponse {
+        (StatusCode::OK, "this is not json")
+    }
+
+    let app = Router::new().route("/api/transactioncreate/qris", post(create));
+    let (base_url, handle) = spawn_app(app).await;
+
+    let client = Client::builder("test-project", "test-key")
+        .base_url(base_url)
+        .retries(0)
+        .build();
+    let service = TransactionService::new(client);
+
+    let err = service
+        .create(
+            PaymentMethod::Qris,
+            &CreateRequest {
+                order_id: "INV1".into(),
+                amount: 1,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("failed to decode response"),
+        "expected DecodeJson, got: {err}"
+    );
+
+    handle.abort();
+}
+
+/// Same shape as the create-decode test but on the `detail` endpoint, which
+/// uses GET + query string. Covers `detail`'s decode error arm.
+#[tokio::test]
+async fn transaction_detail_surfaces_decode_errors() {
+    async fn detail() -> impl IntoResponse {
+        (StatusCode::OK, "not json either")
+    }
+
+    let app = Router::new().route("/api/transactiondetail", get(detail));
+    let (base_url, handle) = spawn_app(app).await;
+
+    let client = Client::builder("test-project", "test-key")
+        .base_url(base_url)
+        .retries(0)
+        .build();
+    let service = TransactionService::new(client);
+
+    let err = service
+        .detail(&DetailRequest {
+            order_id: "INV1".into(),
+            amount: 1,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("failed to decode response"),
+        "expected DecodeJson, got: {err}"
+    );
+
+    handle.abort();
+}

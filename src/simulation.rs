@@ -89,3 +89,68 @@ impl SimulationService {
             .map(|_| ())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Language;
+
+    /// Validation runs before any network call, so a `Client` pointed at an
+    /// unused base URL is enough to exercise the early-return error paths.
+    fn dummy_client(language: Language) -> Client {
+        Client::builder("project", "key")
+            .base_url("http://127.0.0.1:1")
+            .retries(0)
+            .language(language)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn pay_rejects_empty_order_id_with_localized_message() {
+        let service = SimulationService::new(dummy_client(Language::English));
+        let err = service
+            .pay(&PayRequest {
+                order_id: String::new(),
+                amount: 1,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidOrderId { .. }));
+        assert_eq!(err.to_string(), "order ID is required");
+
+        let service = SimulationService::new(dummy_client(Language::Indonesian));
+        let err = service
+            .pay(&PayRequest {
+                order_id: String::new(),
+                amount: 1,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "ID pesanan wajib diisi");
+    }
+
+    #[tokio::test]
+    async fn pay_rejects_non_positive_amount() {
+        let service = SimulationService::new(dummy_client(Language::English));
+        for amount in [0_i64, -1, i64::MIN] {
+            let err = service
+                .pay(&PayRequest {
+                    order_id: "x".into(),
+                    amount,
+                })
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, Error::InvalidAmount { .. }),
+                "amount={amount}"
+            );
+        }
+    }
+
+    #[test]
+    fn simulation_service_is_clone() {
+        // Cheap to clone — the inner Client is reference counted.
+        let service = SimulationService::new(dummy_client(Language::English));
+        let _ = service.clone();
+    }
+}

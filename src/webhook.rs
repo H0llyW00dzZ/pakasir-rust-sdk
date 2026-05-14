@@ -193,3 +193,170 @@ impl Event {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Read};
+
+    const VALID_PAYLOAD: &[u8] = br#"{"amount":22000,"order_id":"INV1","project":"p","status":"completed","payment_method":"qris","completed_at":"2024-09-10T08:07:02.819+07:00","is_sandbox":false}"#;
+
+    fn sample_event() -> Event {
+        Event {
+            amount: 22_000,
+            order_id: "INV1".into(),
+            project: "p".into(),
+            status: TransactionStatus::Completed,
+            payment_method: PaymentMethod::Qris,
+            completed_at: "2024-09-10T08:07:02.819+07:00".into(),
+            is_sandbox: false,
+        }
+    }
+
+    #[test]
+    fn webhook_error_display_covers_every_variant() {
+        assert_eq!(WebhookError::NilReader.to_string(), "webhook: nil reader");
+        assert_eq!(WebhookError::EmptyBody.to_string(), "webhook: empty body");
+        assert_eq!(
+            WebhookError::BodyTooLarge { limit: 1024 }.to_string(),
+            "webhook: body too large: exceeds 1024 bytes"
+        );
+        assert_eq!(
+            WebhookError::ReadBody("io broke".into()).to_string(),
+            "webhook: read body failed: io broke"
+        );
+        assert_eq!(
+            WebhookError::DecodeBody("bad json".into()).to_string(),
+            "webhook: decode body failed: bad json"
+        );
+        assert_eq!(
+            WebhookError::InvalidOrderId.to_string(),
+            "webhook: invalid order id"
+        );
+        assert_eq!(
+            WebhookError::InvalidAmount.to_string(),
+            "webhook: invalid amount"
+        );
+    }
+
+    #[test]
+    fn parser_default_uses_documented_limit() {
+        let parser = Parser::default();
+        assert_eq!(parser.max_body_size, DEFAULT_MAX_BODY_SIZE);
+    }
+
+    #[test]
+    fn parser_new_matches_default() {
+        let a = Parser::new();
+        let b = Parser::default();
+        assert_eq!(a.max_body_size, b.max_body_size);
+    }
+
+    #[test]
+    fn with_max_body_size_zero_is_a_no_op() {
+        let parser = Parser::new().with_max_body_size(0);
+        assert_eq!(parser.max_body_size, DEFAULT_MAX_BODY_SIZE);
+    }
+
+    #[test]
+    fn with_max_body_size_applies_positive_values() {
+        let parser = Parser::new().with_max_body_size(64);
+        assert_eq!(parser.max_body_size, 64);
+    }
+
+    #[test]
+    fn parse_bytes_decodes_a_valid_event() {
+        let event = Parser::new().parse_bytes(VALID_PAYLOAD).unwrap();
+        assert_eq!(event.order_id, "INV1");
+        assert_eq!(event.amount, 22_000);
+        assert_eq!(event.payment_method, PaymentMethod::Qris);
+        assert_eq!(event.status, TransactionStatus::Completed);
+        assert!(!event.is_sandbox);
+    }
+
+    #[test]
+    fn parse_bytes_rejects_empty_input() {
+        let err = Parser::new().parse_bytes(b"").unwrap_err();
+        assert_eq!(err, WebhookError::EmptyBody);
+    }
+
+    #[test]
+    fn parse_bytes_rejects_malformed_json() {
+        let err = Parser::new().parse_bytes(b"not json").unwrap_err();
+        assert!(
+            matches!(&err, WebhookError::DecodeBody(message) if !message.is_empty()),
+            "expected non-empty DecodeBody, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_reader_decodes_a_valid_event() {
+        let event = Parser::new().parse_reader(VALID_PAYLOAD).unwrap();
+        assert_eq!(event.order_id, "INV1");
+    }
+
+    #[test]
+    fn parse_reader_rejects_empty_reader() {
+        let err = Parser::new().parse_reader(&b""[..]).unwrap_err();
+        assert_eq!(err, WebhookError::EmptyBody);
+    }
+
+    #[test]
+    fn parse_reader_rejects_oversize_body() {
+        // Configure a tiny limit so even the small valid payload is "too large".
+        let parser = Parser::new().with_max_body_size(8);
+        let err = parser.parse_reader(VALID_PAYLOAD).unwrap_err();
+        assert_eq!(err, WebhookError::BodyTooLarge { limit: 8 });
+    }
+
+    #[test]
+    fn parse_reader_surfaces_read_errors() {
+        struct FailingReader;
+        impl Read for FailingReader {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("reader broke"))
+            }
+        }
+
+        let err = Parser::new().parse_reader(FailingReader).unwrap_err();
+        assert!(
+            matches!(&err, WebhookError::ReadBody(message) if message.contains("reader broke")),
+            "expected ReadBody containing 'reader broke', got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn event_validate_accepts_a_well_formed_event() {
+        sample_event().validate().unwrap();
+    }
+
+    #[test]
+    fn event_validate_rejects_empty_order_id() {
+        let mut event = sample_event();
+        event.order_id.clear();
+        assert_eq!(event.validate().unwrap_err(), WebhookError::InvalidOrderId);
+    }
+
+    #[test]
+    fn event_validate_rejects_non_positive_amount() {
+        let mut event = sample_event();
+        event.amount = 0;
+        assert_eq!(event.validate().unwrap_err(), WebhookError::InvalidAmount);
+
+        event.amount = -1;
+        assert_eq!(event.validate().unwrap_err(), WebhookError::InvalidAmount);
+    }
+
+    #[test]
+    fn event_parse_time_round_trips_a_known_timestamp() {
+        let parsed = sample_event().parse_time().unwrap();
+        assert_eq!(parsed.to_rfc3339(), "2024-09-10T08:07:02.819+07:00");
+    }
+
+    #[test]
+    fn webhook_error_implements_std_error_trait() {
+        // Sanity: ensure the impl compiles + the trait method is callable.
+        let err: &dyn std::error::Error = &WebhookError::EmptyBody;
+        assert_eq!(err.to_string(), "webhook: empty body");
+    }
+}

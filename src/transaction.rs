@@ -251,3 +251,161 @@ where
 fn urlencoding(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Language;
+
+    fn dummy_client(language: Language) -> Client {
+        Client::builder("project", "key")
+            .base_url("http://127.0.0.1:1")
+            .retries(0)
+            .language(language)
+            .build()
+    }
+
+    #[test]
+    fn validate_request_accepts_well_formed_input() {
+        validate_request(Language::English, "INV1", 1).unwrap();
+    }
+
+    #[test]
+    fn validate_request_rejects_empty_order_id() {
+        let err = validate_request(Language::English, "", 1).unwrap_err();
+        assert!(matches!(err, Error::InvalidOrderId { .. }));
+
+        let err = validate_request(Language::Indonesian, "", 1).unwrap_err();
+        assert_eq!(err.to_string(), "ID pesanan wajib diisi");
+    }
+
+    #[test]
+    fn validate_request_rejects_non_positive_amount() {
+        for amount in [0_i64, -1, i64::MIN] {
+            let err = validate_request(Language::English, "x", amount).unwrap_err();
+            assert!(
+                matches!(err, Error::InvalidAmount { .. }),
+                "amount={amount}"
+            );
+        }
+    }
+
+    #[test]
+    fn encode_body_serializes_request_body_struct() {
+        let bytes = encode_body(
+            Language::English,
+            &RequestBody {
+                project: "p",
+                order_id: "INV1",
+                amount: 5_000,
+                api_key: "k",
+            },
+        )
+        .unwrap();
+        let decoded: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(decoded["project"], "p");
+        assert_eq!(decoded["order_id"], "INV1");
+        assert_eq!(decoded["amount"], 5_000);
+        assert_eq!(decoded["api_key"], "k");
+    }
+
+    #[test]
+    fn urlencoding_escapes_unsafe_chars() {
+        assert_eq!(urlencoding("a b/c"), "a+b%2Fc");
+        assert_eq!(urlencoding("plain"), "plain");
+        assert_eq!(urlencoding("@#$&="), "%40%23%24%26%3D");
+    }
+
+    #[test]
+    fn payment_info_parse_time_parses_iso8601() {
+        let info = PaymentInfo {
+            project: "p".into(),
+            order_id: "INV1".into(),
+            amount: 1,
+            fee: 0,
+            total_payment: 1,
+            payment_method: PaymentMethod::Qris,
+            payment_number: "x".into(),
+            expired_at: "2026-12-25T12:00:00+07:00".into(),
+        };
+        let parsed = info.parse_time().unwrap();
+        assert_eq!(parsed.to_rfc3339(), "2026-12-25T12:00:00+07:00");
+    }
+
+    #[test]
+    fn payment_info_parse_time_surfaces_parse_errors() {
+        let info = PaymentInfo {
+            project: "p".into(),
+            order_id: "INV1".into(),
+            amount: 1,
+            fee: 0,
+            total_payment: 1,
+            payment_method: PaymentMethod::Qris,
+            payment_number: "x".into(),
+            expired_at: "not a date".into(),
+        };
+        assert!(info.parse_time().is_err());
+    }
+
+    #[test]
+    fn transaction_info_parse_time_parses_iso8601() {
+        let info = TransactionInfo {
+            amount: 1,
+            order_id: "INV1".into(),
+            project: "p".into(),
+            status: TransactionStatus::Completed,
+            payment_method: PaymentMethod::Qris,
+            completed_at: "2026-12-25T12:00:00+07:00".into(),
+        };
+        let parsed = info.parse_time().unwrap();
+        assert_eq!(parsed.to_rfc3339(), "2026-12-25T12:00:00+07:00");
+    }
+
+    #[tokio::test]
+    async fn create_rejects_invalid_input_before_network() {
+        let service = TransactionService::new(dummy_client(Language::English));
+        let err = service
+            .create(
+                PaymentMethod::Qris,
+                &CreateRequest {
+                    order_id: String::new(),
+                    amount: 1,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidOrderId { .. }));
+    }
+
+    #[tokio::test]
+    async fn cancel_rejects_invalid_input_before_network() {
+        let service = TransactionService::new(dummy_client(Language::English));
+        let err = service
+            .cancel(&CancelRequest {
+                order_id: "x".into(),
+                amount: 0,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidAmount { .. }));
+    }
+
+    #[tokio::test]
+    async fn detail_rejects_invalid_input_before_network() {
+        let service = TransactionService::new(dummy_client(Language::English));
+        let err = service
+            .detail(&DetailRequest {
+                order_id: String::new(),
+                amount: 1,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidOrderId { .. }));
+    }
+
+    #[test]
+    fn transaction_service_is_clone() {
+        let service = TransactionService::new(dummy_client(Language::English));
+        let _ = service.clone();
+    }
+}

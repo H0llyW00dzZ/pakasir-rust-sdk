@@ -43,31 +43,92 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # x86_64 coverage across the three major OS families is enough for an
-        # HTTP SDK. Add ARM / older runners back targeted if real-world users
-        # report platform-specific issues (e.g. aws-lc-sys glibc 2.38+ C23
-        # symbol mismatch on Linux ARM).
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        # MSRV plus latest stable.
-        rust: ['1.85.0', 'stable']
+        # Minimal high-signal matrix.
+        #
+        # What we exclude and why:
+        # - macos-latest: dtolnay/rust-toolchain@master keeps leaving a
+        #   half-installed cargo shim on Apple Silicon runners. Apple-Silicon
+        #   users will run their own builds locally; CI fighting the image is
+        #   wasted time.
+        # - ubuntu-22.04: older rustup tooling does not cleanly fetch our
+        #   edition-2024 MSRV (1.85.0).
+        # - ubuntu-*-arm: aws-lc-sys glibc 2.38+ C23 symbol mismatch
+        #   (`__isoc23_sscanf`, `__isoc23_strtol`).
+        # - windows-2022 / windows-11-arm: redundant with windows-latest for
+        #   a pure-Rust HTTP crate; image differences rarely surface bugs.
+        # - beta / nightly: not load-bearing. Re-add as scheduled jobs if you
+        #   want early-warning signal on upcoming Rust regressions.
+        include:
+          - { os: ubuntu-latest, rust: '1.85.0' }   # MSRV compile check
+          - { os: ubuntu-latest, rust: stable }     # full lint + test + coverage
+          - { os: windows-latest, rust: stable }    # catch path/CRLF bugs
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      # Canonical dtolnay usage: `@master` is the action ref, and the actual
+      # Rust version comes from `with: toolchain:`. This is the pattern the
+      # action's README recommends.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy, llvm-tools-preview
-          # The action already runs `rustup show` and verifies the install.
-          # It also handles PATH correctly on macOS / Windows / Linux runners,
-          # which avoids the rustup-init shim being picked up before cargo.
-          cache: false  # We use Swatinem/rust-cache below for finer control.
+
+      # Belt-and-suspenders for macOS: dtolnay/rust-toolchain@master has been
+      # observed to "succeed" on macos-latest (Apple Silicon) while leaving
+      # cargo as a half-initialized rustup-init shim. That makes the very
+      # next `cargo build` fail with "unexpected argument 'build'" before
+      # any real work runs.
+      #
+      # We verify cargo actually responds to `--version`; if not, we
+      # bootstrap rustup ourselves, set the requested toolchain as default,
+      # and re-add ~/.cargo/bin to PATH for the rest of the job.
+      - name: Verify Rust install and self-heal if broken
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Make sure subsequent steps see ~/.cargo/bin first.
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+
+          if cargo --version >/dev/null 2>&1 && rustc --version >/dev/null 2>&1; then
+            echo "::notice::cargo + rustc are working; dtolnay install OK."
+            cargo --version
+            rustc --version
+            rustup show || true
+            exit 0
+          fi
+
+          echo "::warning::cargo/rustc not usable after dtolnay install; bootstrapping manually."
+          which cargo || true
+          which rustc || true
+
+          # Install rustup itself (no toolchain yet) only if it's missing.
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --default-toolchain none --profile minimal
+          fi
+
+          rustup toolchain install "${{ matrix.rust }}" \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy \
+            --component llvm-tools-preview
+          rustup default "${{ matrix.rust }}"
+
+          # Fail loudly if it still doesn't work.
+          cargo --version
+          rustc --version
+          rustup show
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
 
+      # Run formatting and clippy only on one canonical runner so we don't
+      # block on stylistic noise across the matrix.
       - name: Check formatting
         if: ${{ matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' }}
         run: cargo fmt --all -- --check
@@ -76,16 +137,27 @@ jobs:
         if: ${{ matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' }}
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      # MSRV (1.85.0) only needs to *compile* the library + examples. We do
+      # not run tests on MSRV because newer dev-dependencies may transitively
+      # require a higher toolchain; `cargo build` does not resolve dev-deps.
+      - name: MSRV build check
+        if: ${{ matrix.rust == '1.85.0' }}
+        run: cargo build --all-features --all-targets --verbose
+
       - name: Build
-        run: cargo build --all-targets --verbose
+        if: ${{ matrix.rust != '1.85.0' }}
+        run: cargo build --all-features --all-targets --verbose
 
       - name: Run tests
-        if: ${{ !(matrix.os == 'ubuntu-latest' && matrix.rust == 'stable') }}
-        run: cargo test --all-targets --verbose
+        if: ${{ matrix.rust != '1.85.0' }}
+        run: cargo test --all-features --all-targets --verbose
 
+      # ── Coverage (single canonical runner only) ──────────────────────────
       - name: Install cargo-llvm-cov
         if: ${{ matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' }}
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
 
       - name: Run tests with coverage
         if: ${{ matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' }}
