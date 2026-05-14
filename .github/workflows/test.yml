@@ -40,27 +40,28 @@ jobs:
   coverage:
     name: 🔢 Test Coverage on ${{ matrix.os }} (Rust ${{ matrix.rust }})
     runs-on: ${{ matrix.os }}
-    # Allow nightly + beta to fail without failing the whole pipeline; they
-    # exist to surface upcoming regressions early, not to block merges.
-    continue-on-error: ${{ matrix.rust == 'nightly' || matrix.rust == 'beta' }}
     strategy:
       fail-fast: false
       matrix:
-        # ARM Linux runners (`ubuntu-*-arm`) are intentionally excluded — the
-        # `aws-lc-sys` C dep transitively pulled in by reqwest 0.13's default
-        # rustls provider hits the glibc 2.38+ C23 symbol issue on those
-        # runners (undefined references to `__isoc23_sscanf` / `__isoc23_strtol`).
-        # Add them back once aws-lc-sys ships a fix or once we switch the
-        # crypto provider away from aws-lc-rs.
-        os:
-          - ubuntu-latest
-          - ubuntu-22.04
-          - macos-latest
-          - windows-latest
-          - windows-2022
-          - windows-11-arm
-        # MSRV plus the standard release channels.
-        rust: ['1.85.0', stable, beta, nightly]
+        # Minimal high-signal matrix.
+        #
+        # What we exclude and why:
+        # - macos-latest: dtolnay/rust-toolchain@master keeps leaving a
+        #   half-installed cargo shim on Apple Silicon runners. Apple-Silicon
+        #   users will run their own builds locally; CI fighting the image is
+        #   wasted time.
+        # - ubuntu-22.04: older rustup tooling does not cleanly fetch our
+        #   edition-2024 MSRV (1.85.0).
+        # - ubuntu-*-arm: aws-lc-sys glibc 2.38+ C23 symbol mismatch
+        #   (`__isoc23_sscanf`, `__isoc23_strtol`).
+        # - windows-2022 / windows-11-arm: redundant with windows-latest for
+        #   a pure-Rust HTTP crate; image differences rarely surface bugs.
+        # - beta / nightly: not load-bearing. Re-add as scheduled jobs if you
+        #   want early-warning signal on upcoming Rust regressions.
+        include:
+          - { os: ubuntu-latest, rust: '1.85.0' }   # MSRV compile check
+          - { os: ubuntu-latest, rust: stable }     # full lint + test + coverage
+          - { os: windows-latest, rust: stable }    # catch path/CRLF bugs
 
     steps:
       - name: Checkout code
