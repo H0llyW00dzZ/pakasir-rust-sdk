@@ -44,6 +44,11 @@ pub struct Options {
     /// page only offers the QRIS option.
     pub qris_only: bool,
     /// When `true`, swaps the `pay` path segment for `paypal`.
+    ///
+    /// **Unofficial:** the public Pakasir docs at
+    /// <https://pakasir.com/p/docs> only document the `/pay/` path. This
+    /// flag is preserved for parity with the upstream Go SDK; the live
+    /// hosted-checkout page may not recognize the `/paypal/` prefix.
     pub use_paypal: bool,
 }
 

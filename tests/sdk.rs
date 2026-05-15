@@ -136,7 +136,12 @@ async fn transaction_create_cancel_and_detail_work() {
         .unwrap();
     assert_eq!(detailed.transaction.status.as_str(), "completed");
     assert_eq!(
-        detailed.transaction.parse_time().unwrap().to_rfc3339(),
+        detailed
+            .transaction
+            .parse_time()
+            .expect("completed_at present")
+            .unwrap()
+            .to_rfc3339(),
         "2026-12-25T12:00:00+00:00"
     );
 

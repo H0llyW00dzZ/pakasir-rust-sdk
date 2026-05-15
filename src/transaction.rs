@@ -122,16 +122,40 @@ pub struct TransactionInfo {
     pub status: TransactionStatus,
     /// Payment method used for this transaction.
     pub payment_method: PaymentMethod,
-    /// RFC 3339 completion timestamp. Empty for transactions that never
-    /// reached the completed state.
-    pub completed_at: String,
+    /// RFC 3339 completion timestamp.
+    ///
+    /// Only populated once the transaction has actually been paid. The
+    /// upstream API omits the field (or sends `null`) for `pending`,
+    /// `expired`, and cancelled transactions, so it is modelled as
+    /// optional. Use [`TransactionInfo::parse_time`] to obtain a parsed
+    /// [`DateTime`].
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
+    pub completed_at: Option<String>,
 }
 
 impl TransactionInfo {
     /// Parse [`TransactionInfo::completed_at`] into a [`DateTime`].
-    pub fn parse_time(&self) -> std::result::Result<DateTime<FixedOffset>, chrono::ParseError> {
-        timefmt::parse_rfc3339(&self.completed_at)
+    ///
+    /// Returns `None` when the API did not include a completion timestamp
+    /// (e.g. for `pending` or `expired` transactions). When a timestamp is
+    /// present, the inner `Result` carries any parse failure.
+    pub fn parse_time(
+        &self,
+    ) -> Option<std::result::Result<DateTime<FixedOffset>, chrono::ParseError>> {
+        self.completed_at.as_deref().map(timefmt::parse_rfc3339)
     }
+}
+
+/// Treat both a missing field and an explicit `null` as `None` while still
+/// accepting a regular string value. The upstream API has been observed to
+/// use both shapes for absent timestamps.
+fn deserialize_optional_string<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
 }
 
 /// Wire-format body. Project / API key come from the client so callers
@@ -355,10 +379,39 @@ mod tests {
             project: "p".into(),
             status: TransactionStatus::Completed,
             payment_method: PaymentMethod::Qris,
-            completed_at: "2026-12-25T12:00:00+07:00".into(),
+            completed_at: Some("2026-12-25T12:00:00+07:00".into()),
         };
-        let parsed = info.parse_time().unwrap();
+        let parsed = info.parse_time().unwrap().unwrap();
         assert_eq!(parsed.to_rfc3339(), "2026-12-25T12:00:00+07:00");
+    }
+
+    #[test]
+    fn transaction_info_parse_time_returns_none_when_completed_at_missing() {
+        let info = TransactionInfo {
+            amount: 1,
+            order_id: "INV1".into(),
+            project: "p".into(),
+            status: TransactionStatus::Pending,
+            payment_method: PaymentMethod::Qris,
+            completed_at: None,
+        };
+        assert!(info.parse_time().is_none());
+    }
+
+    #[test]
+    fn transaction_info_deserializes_with_missing_completed_at() {
+        // Pending / expired transactions arrive without `completed_at`.
+        let payload = br#"{"amount":1,"order_id":"INV1","project":"p","status":"pending","payment_method":"qris"}"#;
+        let info: TransactionInfo = serde_json::from_slice(payload).unwrap();
+        assert_eq!(info.completed_at, None);
+        assert!(info.parse_time().is_none());
+    }
+
+    #[test]
+    fn transaction_info_deserializes_with_null_completed_at() {
+        let payload = br#"{"amount":1,"order_id":"INV1","project":"p","status":"pending","payment_method":"qris","completed_at":null}"#;
+        let info: TransactionInfo = serde_json::from_slice(payload).unwrap();
+        assert_eq!(info.completed_at, None);
     }
 
     #[tokio::test]

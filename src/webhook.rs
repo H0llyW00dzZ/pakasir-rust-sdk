@@ -169,6 +169,12 @@ pub struct Event {
     /// RFC 3339 completion timestamp.
     pub completed_at: String,
     /// `true` when this event came from a sandbox project.
+    ///
+    /// Not part of the public Pakasir webhook contract — the upstream
+    /// payload documented at <https://pakasir.com/p/docs> does not include
+    /// this field. Defaults to `false` when the JSON body omits it so
+    /// production webhooks continue to deserialize cleanly.
+    #[serde(default)]
     pub is_sandbox: bool,
 }
 
@@ -200,6 +206,10 @@ mod tests {
     use std::io::{self, Read};
 
     const VALID_PAYLOAD: &[u8] = br#"{"amount":22000,"order_id":"INV1","project":"p","status":"completed","payment_method":"qris","completed_at":"2024-09-10T08:07:02.819+07:00","is_sandbox":false}"#;
+
+    /// Mirrors the exact payload shape documented at
+    /// <https://pakasir.com/p/docs>, which omits `is_sandbox`.
+    const DOC_PAYLOAD: &[u8] = br#"{"amount":22000,"order_id":"240910HDE7C9","project":"depodomain","status":"completed","payment_method":"qris","completed_at":"2024-09-10T08:07:02.819+07:00"}"#;
 
     fn sample_event() -> Event {
         Event {
@@ -271,6 +281,15 @@ mod tests {
         assert_eq!(event.amount, 22_000);
         assert_eq!(event.payment_method, PaymentMethod::Qris);
         assert_eq!(event.status, TransactionStatus::Completed);
+        assert!(!event.is_sandbox);
+    }
+
+    #[test]
+    fn parse_bytes_accepts_doc_payload_without_is_sandbox() {
+        // The documented webhook body does not include `is_sandbox`; serde
+        // must default it to `false` instead of failing the whole decode.
+        let event = Parser::new().parse_bytes(DOC_PAYLOAD).unwrap();
+        assert_eq!(event.order_id, "240910HDE7C9");
         assert!(!event.is_sandbox);
     }
 
