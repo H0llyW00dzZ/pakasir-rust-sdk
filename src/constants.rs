@@ -95,6 +95,10 @@ pub enum PaymentMethod {
     #[serde(rename = "bri_va")]
     BriVa,
     /// PayPal (`paypal`).
+    ///
+    /// **Unofficial:** not listed in the public Pakasir documentation at
+    /// <https://pakasir.com/p/docs>. Kept for parity with the upstream Go
+    /// SDK. Requests using this method may be rejected by the live API.
     #[serde(rename = "paypal")]
     Paypal,
 }
