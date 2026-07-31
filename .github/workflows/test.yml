@@ -155,7 +155,7 @@ jobs:
       # ── Coverage (single canonical runner only) ──────────────────────────
       - name: Install cargo-llvm-cov
         if: ${{ matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' }}
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.3
         with:
           tool: cargo-llvm-cov
 
